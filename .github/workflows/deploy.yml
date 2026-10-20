@@ -65,10 +65,14 @@ jobs:
         run: sam build --template "${{ env.SAM_TEMPLATE }}"
 
       - name: SAM deploy
+        # --config-file applies samconfig.toml's parameter_overrides so the repo
+        # is the source of truth (otherwise an existing stack reuses previously
+        # deployed parameter values, e.g. a stale EnableWaf).
         run: |
           sam deploy \
             --stack-name "${{ env.STACK_NAME }}" \
             --region "${{ env.AWS_REGION }}" \
+            --config-file samconfig.toml \
             --capabilities CAPABILITY_NAMED_IAM \
             --resolve-s3 \
             --no-confirm-changeset \
