@@ -21,12 +21,16 @@ from diagrams.aws.storage import SimpleStorageServiceS3
 from diagrams.aws.network import APIGateway
 from diagrams.aws.security import WAF
 from diagrams.aws.management import Cloudwatch
+from diagrams.aws.devtools import Codepipeline
 from diagrams.onprem.client import User
+from diagrams.onprem.vcs import Github
 
 graph_attr = {
     "fontsize": "20",
     "labelloc": "t",
-    "pad": "0.6",
+    "pad": "0.7",
+    "nodesep": "0.8",
+    "ranksep": "1.1",
     "splines": "spline",
     "bgcolor": "white",
 }
@@ -38,35 +42,45 @@ with Diagram(
     direction="LR",
     graph_attr=graph_attr,
 ):
-    user = User("User\n(Browser SPA)")
+    user = User("User\n(Browser)")
+
+    with Cluster("CI/CD"):
+        gh = Github("GitHub Actions\n(SAM deploy + sync)")
 
     with Cluster("AWS Cloud - us-east-1"):
-        waf = WAF("AWS WAF\nIP rate limit")
-        api = APIGateway("API Gateway\nPOST /analyze-cv")
+        site = SimpleStorageServiceS3("S3 Static Site\n(frontend SPA)")
+
+        with Cluster("Edge / API"):
+            waf = WAF("AWS WAF\nIP rate limit")
+            api = APIGateway("API Gateway\nPOST /analyze-cv")
 
         with Cluster("Async processing"):
             queue = SimpleQueueServiceSqs("SQS\nJob Queue")
             worker = Lambda("Worker Lambda")
             dlq = SimpleQueueServiceSqs("SQS\nDead-letter Queue")
 
-        bedrock = Bedrock("Bedrock\nAnalyze + Enhance")
-        results = SimpleStorageServiceS3("S3 (private)\nEnhanced CV + Analysis")
-        topic = SimpleNotificationServiceSns("SNS\nNotifications")
+        with Cluster("AI + storage + notify"):
+            bedrock = Bedrock("Bedrock\nAnalyze + Enhance")
+            results = SimpleStorageServiceS3("S3 (private)\nEnhanced CV + Analysis")
+            topic = SimpleNotificationServiceSns("SNS\nNotifications")
 
         logs = Cloudwatch("CloudWatch\nLogs + X-Ray")
 
-        # Main request flow
-        user >> Edge(label="1. CV + job details") >> waf
+        # Request flow
+        user >> Edge(label="1. load site") >> site
+        user >> Edge(label="2. submit CV + job details") >> waf
         waf >> Edge(label="rate-limited") >> api
-        api >> Edge(label="2. SendMessage") >> queue
-        queue >> Edge(label="3. trigger") >> worker
-        worker >> Edge(label="4. enhance") >> bedrock
-        worker >> Edge(label="5. save results") >> results
-        worker >> Edge(label="6. publish") >> topic
-        topic >> Edge(label="7. email: secure link", style="dashed") >> user
+        api >> Edge(label="3. SendMessage") >> queue
+        queue >> Edge(label="4. trigger") >> worker
+        worker >> Edge(label="5. enhance") >> bedrock
+        worker >> Edge(label="6. save results") >> results
+        worker >> Edge(label="7. publish") >> topic
+        topic >> Edge(label="8. email: secure link", style="dashed") >> user
 
-        # Failure path
+        # Failure path + observability
         queue >> Edge(label="after 3 retries", style="dashed", color="firebrick") >> dlq
-
-        # Observability
         worker >> Edge(style="dotted", color="gray", label="logs") >> logs
+
+    # CI/CD deploys the stack and publishes the frontend
+    gh >> Edge(style="dotted", color="darkgreen", label="deploy") >> api
+    gh >> Edge(style="dotted", color="darkgreen", label="publish") >> site
