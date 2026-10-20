@@ -1,6 +1,7 @@
 # CV Enhancer
 
 [![Deploy CV Enhancer (SAM)](https://github.com/Govinder-1992/CV-ENHANCER/actions/workflows/deploy.yml/badge.svg)](https://github.com/Govinder-1992/CV-ENHANCER/actions/workflows/deploy.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 An AI-powered CV enhancer built on AWS. A user uploads a CV (PDF or DOCX) with a
 target job role, job description, and email. The system analyzes the CV against
@@ -13,6 +14,16 @@ original CV**.
   defined as infrastructure-as-code with AWS SAM.
 - **CI/CD** — GitHub Actions deploys the backend and publishes the frontend on
   every push to `main`.
+
+---
+
+## Demo
+
+![CV Enhancer frontend](docs/screenshot.png)
+
+The single-page app: upload a PDF/DOCX CV, enter the target role, job
+description, and email, then submit. Validation runs in the browser before the
+request is queued for processing.
 
 ---
 
@@ -277,3 +288,9 @@ python architecture.py      # writes cv-enhancer-architecture.png
   processing fails with `ThrottlingException: Too many tokens per day`, the cap
   is exhausted; raise it via AWS Support or wait for the reset.
 - The S3 website URL is HTTP-only; put Amazon CloudFront in front for HTTPS.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
