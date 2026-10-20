@@ -1,5 +1,7 @@
 # CV Enhancer
 
+[![Deploy CV Enhancer (SAM)](https://github.com/Govinder-1992/CV-ENHANCER/actions/workflows/deploy.yml/badge.svg)](https://github.com/Govinder-1992/CV-ENHANCER/actions/workflows/deploy.yml)
+
 An AI-powered CV enhancer built on AWS. A user uploads a CV (PDF or DOCX) with a
 target job role, job description, and email. The system analyzes the CV against
 the job, rewrites/enhances it with **Amazon Bedrock**, stores the result in
