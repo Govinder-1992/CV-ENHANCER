@@ -8,8 +8,8 @@ __pycache__/
 .venv/
 venv/
 
-# Diagram render output (generated)
-diagram/*.png
+# Diagram render output is committed so it renders in the README.
+# (intentionally NOT ignored: diagram/cv-enhancer-architecture.png)
 
 # OS / editor
 .DS_Store

@@ -1,86 +1,211 @@
-# CV Enhancer – Backend (single AWS Lambda)
+# CV Enhancer
 
-One AWS Lambda, behind Amazon API Gateway, does the whole job synchronously:
+An AI-powered CV enhancer built on AWS. A user uploads a CV (PDF or DOCX) with a
+target job role, job description, and email. The system analyzes the CV against
+the job, rewrites/enhances it with **Amazon Bedrock**, stores the result in
+Amazon S3, and emails a secure download link — **without ever storing the
+original CV**.
 
-1. **Validate** the uploaded CV (PDF/DOCX, size, magic bytes) and job details.
-2. **Extract text** from the CV. The original binary is processed in memory and
-   **never written to S3**.
-3. **Enhance** the CV with **Amazon Bedrock** (Converse API) — returns an
-   analysis (match score, strengths, gaps, suggestions) plus a rewritten CV.
-4. **Store** only the enhanced CV + analysis JSON in **S3** (KMS-encrypted) and
-   mint a presigned download URL.
-5. **Notify** via **Amazon SNS** on completion (and on failure).
+- **Frontend** — a static, responsive single-page site (HTML/CSS/JS).
+- **Backend** — API Gateway → SQS → worker Lambda → Bedrock → S3 → SNS,
+  defined as infrastructure-as-code with AWS SAM.
+- **CI/CD** — GitHub Actions deploys the backend and publishes the frontend on
+  every push to `main`.
+
+---
 
 ## Architecture
 
+![CV Enhancer AWS architecture](diagram/cv-enhancer-architecture.png)
+
+> Rendered with the official AWS Architecture icons via the
+> [`diagrams`](https://diagrams.mingrammer.com/) library. To regenerate it, see
+> [Regenerate the diagram](#regenerate-the-architecture-diagram).
+
+### Request flow
+
+1. **User → Amazon API Gateway** — the browser sends `POST /analyze-cv` with the
+   CV (base64) and job details. API Gateway validates the request body.
+2. **API Gateway → Amazon SQS** — a direct AWS service integration puts the job
+   on the queue (`SendMessage`). The API immediately returns `202 { requestId }`.
+3. **SQS → Worker Lambda** — the queue triggers the worker (one message at a time).
+4. **Lambda → Amazon Bedrock** — the worker extracts the CV text in memory and
+   calls Bedrock to analyze and enhance it.
+5. **Lambda → Amazon S3** — only the enhanced CV + analysis JSON are saved
+   (the original CV is never written).
+6. **Lambda → Amazon SNS** — a completion (or failure) notification is published.
+7. **SNS → User** — the user receives an email with a secure, time-limited link.
+
+Failed messages redrive to a **dead-letter queue** after 3 attempts.
+
+---
+
+## Repository layout
+
 ```
-Browser ──POST /analyze──> API Gateway ──> Lambda (cv-enhancer)
-                                              │
-                                              ├─ Bedrock (analyze + enhance)
-                                              ├─ S3  (enhanced CV + analysis, KMS)
-                                              └─ SNS (completion / failure)
-                                              └─ SQS DLQ (async failures)
+.
+├── index.html / styles.css / app.js   # Frontend static site
+├── config.js                          # Frontend runtime config (API endpoint)
+├── template.yaml                      # SAM template (API, SQS, Lambda, S3, SNS, IAM)
+├── samconfig.toml                     # Saved SAM deploy parameters
+├── src/                               # Lambda source
+│   ├── requirements.txt               # pypdf, python-docx
+│   ├── app/
+│   │   ├── worker.py                  # SQS-triggered entrypoint
+│   │   ├── bedrock_client.py          # Bedrock analyze + enhance
+│   │   ├── storage.py                 # S3 save + presigned URL
+│   │   └── notifications.py           # SNS publish (per-user email)
+│   └── common/
+│       ├── validation.py              # file + field validation
+│       ├── text_extraction.py         # PDF/DOCX -> text
+│       ├── errors.py                  # typed errors
+│       ├── logging_utils.py           # structured JSON logging
+│       └── http.py                    # API Gateway responses + CORS
+├── diagram/
+│   ├── architecture.py                # Diagram-as-code (official AWS icons)
+│   └── cv-enhancer-architecture.png   # Rendered diagram
+└── .github/workflows/deploy.yml       # CI/CD pipeline
 ```
 
-## Project layout
+---
 
-```
-backend/
-├── template.yaml              # SAM: Lambda, API, S3, SNS, KMS, DLQ, IAM
-└── src/
-    ├── requirements.txt
-    ├── app/
-    │   ├── handler.py         # Lambda entrypoint (app.handler.lambda_handler)
-    │   ├── bedrock_client.py  # Bedrock analyze + enhance
-    │   ├── storage.py         # S3 save + presigned URL
-    │   └── notifications.py   # SNS publish
-    └── common/
-        ├── validation.py      # file + field validation
-        ├── text_extraction.py # PDF/DOCX -> text
-        ├── errors.py          # typed errors -> HTTP status
-        ├── logging_utils.py   # structured JSON logging
-        └── http.py            # API Gateway responses + CORS
-```
+## Step-by-step setup
 
-## Prerequisites
+### Step 1 — Prerequisites
+
+Install and configure:
 
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
-  and configured AWS credentials.
-- **Bedrock model access**: in the Bedrock console, enable access to the model
-  referenced by `BedrockModelId` (default Claude 3.5 Sonnet) in your region.
-- Docker (for `sam build --use-container`, recommended so native wheels match
-  the Lambda runtime).
+- [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), then `aws configure`
+- Python 3.12
+- (For the diagram) [Graphviz](https://graphviz.org/download/) and `pip install diagrams`
 
-## Deploy
+### Step 2 — Enable Amazon Bedrock model access
+
+In the AWS Console → **Amazon Bedrock → Model access** (in your region), enable
+the model used by `BedrockModelId`
+(default `us.anthropic.claude-haiku-4-5-20251001-v1:0`). If prompted, complete
+the Anthropic use-case form. Without this, processing fails with an access or
+`ResourceNotFoundException` error.
+
+### Step 3 — Build
 
 ```powershell
-# from the backend/ folder
-sam build --use-container
-sam deploy --guided
+sam build
 ```
 
-During the guided deploy you'll set parameters:
+This installs `src/requirements.txt` (pypdf, python-docx) and packages the
+worker Lambda.
 
-| Parameter               | Default                                        | Notes                                   |
-| ----------------------- | ---------------------------------------------- | --------------------------------------- |
-| `StageName`             | `prod`                                         | API stage                               |
-| `BedrockModelId`        | `anthropic.claude-3-5-sonnet-20240620-v1:0`    | Must be enabled in your region          |
-| `MaxFileSizeMb`         | `5`                                            | Upload size cap                         |
-| `CorsAllowOrigin`       | `*`                                            | Set to your site origin in production   |
-| `NotificationEmail`     | *(empty)*                                      | If set, subscribes an email to SNS      |
-| `DownloadUrlTtlSeconds` | `86400`                                        | Presigned URL lifetime                  |
+### Step 4 — Deploy
 
-If you set `NotificationEmail`, confirm the SNS subscription from your inbox.
+```powershell
+sam deploy
+```
 
-After deploy, copy the `ApiEndpoint` output into the frontend `config.js` as
-`API_ENDPOINT`.
+Parameters (saved in `samconfig.toml`; use `sam deploy --guided` to change them):
 
-> **API Gateway payload limit:** REST APIs cap the request body at ~10 MB. Since
-> the CV is base64-encoded (~33% overhead), keep `MaxFileSizeMb` at 5 or lower.
+| Parameter               | Default                                      | Notes                                   |
+| ----------------------- | -------------------------------------------- | --------------------------------------- |
+| `StageName`             | `prod`                                       | API stage                               |
+| `BedrockModelId`        | `us.anthropic.claude-haiku-4-5-20251001-v1:0`| Inference-profile id; must be enabled   |
+| `MaxFileSizeMb`         | `5`                                          | Worker-side size cap                    |
+| `CorsAllowOrigin`       | `*`                                          | Set to your site origin in production   |
+| `NotificationEmail`     | *(empty)*                                    | Optional admin subscriber               |
+| `DownloadUrlTtlSeconds` | `86400`                                      | Presigned URL lifetime                  |
+| `AuthMode`              | `NONE`                                       | `NONE` (public) or `API_KEY`            |
 
-## Request / response
+### Step 5 — Read the stack outputs
 
-**Request** (`POST /analyze`, JSON):
+```powershell
+aws cloudformation describe-stacks --stack-name sam-app --region us-east-1 --query "Stacks[0].Outputs" --output table
+```
+
+- `ApiEndpoint` → set as `API_ENDPOINT` in `config.js`.
+- `FrontendWebsiteUrl` → the public site URL.
+- `ResultsBucketName` → where enhanced CVs/analysis are stored.
+
+### Step 6 — Publish the frontend
+
+The CI pipeline does this automatically, or manually:
+
+```powershell
+# replace <FrontendBucketName> with the stack output
+aws s3 sync . "s3://<FrontendBucketName>" --exclude "*" `
+  --include "index.html" --include "app.js" --include "styles.css" --include "config.js"
+```
+
+### Step 7 — Test
+
+Open `FrontendWebsiteUrl`, or run locally:
+
+```powershell
+python -m http.server 8080   # then open http://localhost:8080
+```
+
+Watch the worker process a submission:
+
+```powershell
+sam logs --stack-name sam-app --name WorkerFunction --region us-east-1 --tail
+```
+
+Confirm results were written to S3:
+
+```powershell
+aws s3 ls s3://<ResultsBucketName>/results/ --recursive --region us-east-1
+```
+
+---
+
+## CI/CD with GitHub Actions
+
+`.github/workflows/deploy.yml` runs on every push to `main` (and manual
+dispatch) with two jobs:
+
+1. **deploy** — `sam validate` → `sam build` → `sam deploy`.
+2. **frontend** — reads `ApiEndpoint` from the stack outputs, injects it into
+   `config.js`, and syncs the static site to the frontend S3 bucket.
+
+### Set up the pipeline
+
+1. Push the repo to GitHub:
+
+   ```powershell
+   git init -b main
+   git add .
+   git commit -m "Initial commit"
+   gh repo create cv-enhancer --private --source=. --remote=origin --push
+   ```
+
+2. Add the AWS credentials as repository secrets:
+
+   ```powershell
+   gh secret set AWS_ACCESS_KEY_ID
+   gh secret set AWS_SECRET_ACCESS_KEY
+   ```
+
+   Optional repository **variables** (defaults: `us-east-1`, `sam-app`):
+
+   ```powershell
+   gh variable set AWS_REGION --body "us-east-1"
+   gh variable set STACK_NAME --body "sam-app"
+   ```
+
+3. Trigger a run:
+
+   ```powershell
+   gh workflow run "Deploy CV Enhancer (SAM)"
+   gh run watch
+   ```
+
+The deploy IAM user needs permissions for CloudFormation, Lambda, API Gateway,
+S3, SQS, SNS, IAM, and CloudWatch Logs.
+
+---
+
+## API reference
+
+**Request** — `POST /analyze-cv` (JSON):
 
 ```json
 {
@@ -93,63 +218,60 @@ After deploy, copy the `ApiEndpoint` output into the frontend `config.js` as
 }
 ```
 
-**Success** (`200`):
+**Accepted** — `202`:
 
 ```json
-{
-  "jobId": "a1b2c3d4-...",
-  "status": "completed",
-  "downloadUrl": "https://<bucket>.s3...&X-Amz-Signature=...",
-  "expiresInSeconds": 86400,
-  "analysis": {
-    "matchScore": 78,
-    "summary": "...",
-    "strengths": ["..."],
-    "gaps": ["..."],
-    "suggestions": ["..."]
-  },
-  "message": "Your enhanced CV is ready."
-}
+{ "requestId": "a1b2c3d4-...", "status": "processing", "message": "..." }
 ```
 
-**Errors**: clean JSON with `error` (machine code) and `message`:
+Results are emailed and stored in S3 at `results/<requestId>/enhanced-cv.txt`
+and `.../analysis.json`. The analysis JSON contains `matchScore`, `summary`,
+`strengths`, `missingSkills`, `recommendedKeywords`, `gaps`, and `suggestions`.
 
-- `400 validation_error` / `unsupported_file_type` / `file_too_large`
-- `422 text_extraction_failed` (e.g. scanned/image-only PDF)
-- `503 transient_error` (Bedrock throttling — safe to retry)
-- `500 internal_error`
-
-## Error handling, retries & logging
-
-- **Typed errors** map to HTTP status codes; client errors are logged at
-  `WARNING`, unexpected ones at `ERROR` with a full stack trace.
-- **Retries**: the Bedrock client uses adaptive retries for throttling. Bedrock
-  throttling/5xx surface as `503` so the caller can retry. A **DLQ** is attached
-  for any async invocation failures.
-- **Logging**: structured JSON lines with a `correlationId` (the Lambda request
-  id) tying every log for one request together. Logs land in the function's
-  CloudWatch log group (`/aws/lambda/cv-enhancer-<stage>`, 30-day retention).
-- **Failure notifications**: when a job id exists, a failure is also published
-  to SNS so the user can be told their CV couldn't be processed.
+---
 
 ## Security
 
-- **No original CV in S3** — only the enhanced CV + analysis are stored.
-- **Encryption**: S3 and SNS use a dedicated **KMS** key (rotation enabled); the
-  bucket blocks all public access and denies non-TLS requests.
-- **Least-privilege IAM**: the function may only write under `results/*`,
-  publish to its SNS topic, invoke the configured Bedrock model, use the KMS
-  key, and send to the DLQ.
-- **Presigned URLs** expire (`DownloadUrlTtlSeconds`), and results auto-expire
-  after 30 days via a lifecycle rule.
+- **Original CV is never stored** — only the enhanced CV + analysis go to S3.
+- **Encryption at rest** — S3 uses SSE-S3 (AES256); SQS uses SQS-managed SSE.
+- **Private results bucket** — all public access blocked, TLS enforced, objects
+  auto-expire after 30 days.
+- **Least-privilege IAM** — the worker may only write under `results/*`, publish
+  to its SNS topic, and invoke the configured Bedrock model.
+- **Secure download links** — time-limited presigned URLs.
 
-## Local test
+---
+
+## Error handling, retries & logging
+
+- **Partial-batch SQS processing** — only failed messages are retried.
+- **Transient errors** (e.g. Bedrock throttling) are retried; after 3 receives a
+  message redrives to the **dead-letter queue**.
+- **Permanent errors** publish a failure notification and are not retried.
+- **Structured JSON logs** with a `requestId` per job, in CloudWatch
+  (`/aws/lambda/cv-enhancer-worker-<stage>`, 30-day retention).
+
+---
+
+## Regenerate the architecture diagram
+
+The diagram uses the official AWS icons via the `diagrams` library (needs
+Graphviz on PATH):
 
 ```powershell
-sam local invoke CvEnhancerFunction --event events/analyze.json
+cd diagram
+pip install -r requirements.txt
+python architecture.py      # writes cv-enhancer-architecture.png
 ```
 
-Create `events/analyze.json` as an API Gateway proxy event whose `body` is the
-JSON request above (stringified). Bedrock/S3/SNS calls still hit AWS, so use a
-sandbox account.
-```
+---
+
+## Notes & limitations
+
+- **SQS 256 KB message limit** — API Gateway forwards the request body straight
+  into an SQS message, so the base64 CV must fit under ~256 KB. The frontend
+  enforces a conservative upload cap.
+- **Bedrock quotas** — new/free-tier accounts have a low daily token limit. If
+  processing fails with `ThrottlingException: Too many tokens per day`, the cap
+  is exhausted; raise it via AWS Support or wait for the reset.
+- The S3 website URL is HTTP-only; put Amazon CloudFront in front for HTTPS.
