@@ -46,6 +46,13 @@ Parameters:
     Description: >
       Authentication for POST /analyze-cv. NONE = public (browser calls it
       directly). API_KEY = require an 'x-api-key' header tied to a usage plan.
+  EnableWaf:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Whether to create and attach the AWS WAF Web ACL to the API. Set to
+      "false" to skip WAF (avoids its ~$5/month cost) when not needed.
   WafRateLimit:
     Type: Number
     Default: 500
@@ -57,6 +64,7 @@ Parameters:
 
 Conditions:
   HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+  WafEnabled: !Equals [!Ref EnableWaf, "true"]
   UseApiKey: !Equals [!Ref AuthMode, API_KEY]
 
 Globals:
@@ -474,6 +482,7 @@ Resources:
   # exceeds WafRateLimit requests in a rolling 5-minute window is blocked (403).
   ApiWebAcl:
     Type: AWS::WAFv2::WebACL
+    Condition: WafEnabled
     Properties:
       Name: !Sub "cv-enhancer-${StageName}-web-acl"
       Scope: REGIONAL
@@ -513,6 +522,7 @@ Resources:
   # Associate the Web ACL with the API Gateway stage.
   ApiWebAclAssociation:
     Type: AWS::WAFv2::WebACLAssociation
+    Condition: WafEnabled
     Properties:
       ResourceArn: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/${CvEnhancerApi}/stages/${StageName}"
       WebACLArn: !GetAtt ApiWebAcl.Arn
@@ -580,5 +590,6 @@ Outputs:
     Description: Public URL of the CV Enhancer frontend.
     Value: !GetAtt FrontendBucket.WebsiteURL
   WebAclArn:
+    Condition: WafEnabled
     Description: AWS WAF Web ACL protecting the API (IP rate limit + managed rules).
     Value: !GetAtt ApiWebAcl.Arn
