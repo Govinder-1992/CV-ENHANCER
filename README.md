@@ -302,6 +302,41 @@ python architecture.py      # writes cv-enhancer-architecture.png
 
 ---
 
+## Cost estimate
+
+For light / demo usage. Most services are usage-based and fall in or near the
+AWS Free Tier; the only fixed monthly cost is AWS WAF (which you can disable).
+
+| Service            | Pricing model                          | Light-usage estimate        |
+| ------------------ | -------------------------------------- | --------------------------- |
+| API Gateway (REST) | Per million requests                   | ~$0 (free tier) – a few ¢   |
+| Lambda (worker)    | Per request + GB-second                | ~$0 (free tier)             |
+| SQS                | Per million requests                   | ~$0 (free tier)             |
+| S3 (results + site)| Storage + requests                     | < $0.10                     |
+| SNS (email)        | Per notification                       | ~$0 (free tier)             |
+| CloudWatch Logs    | Ingestion + storage                    | < $0.50                     |
+| **Amazon Bedrock** | Per input/output token                 | Varies with CV size & model |
+| **AWS WAF**        | ~$5/Web ACL + ~$1/rule + per-request   | **~$6–7/month (fixed)**     |
+
+**Biggest levers:**
+
+- **WAF** is the main fixed cost. Disable it when not demoing:
+  `sam deploy --parameter-overrides EnableWaf=false`.
+- **Bedrock** cost scales with tokens. The default **Haiku** model is the
+  cheapest Claude tier; larger CVs and job descriptions cost more per request.
+
+Figures are rough order-of-magnitude guidance, not a quote. Use the
+[AWS Pricing Calculator](https://calculator.aws/) for an accurate estimate in
+your region.
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
 ## License
 
 Released under the [MIT License](LICENSE).
