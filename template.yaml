@@ -46,6 +46,14 @@ Parameters:
     Description: >
       Authentication for POST /analyze-cv. NONE = public (browser calls it
       directly). API_KEY = require an 'x-api-key' header tied to a usage plan.
+  WafRateLimit:
+    Type: Number
+    Default: 500
+    MinValue: 10
+    MaxValue: 2000000000
+    Description: >
+      AWS WAF rate limit: max requests allowed from a single IP in any rolling
+      5-minute window. Requests beyond this are blocked with HTTP 403.
 
 Conditions:
   HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
@@ -461,6 +469,54 @@ Resources:
       KeyType: API_KEY
       UsagePlanId: !Ref CvEnhancerUsagePlan
 
+  # ---------- AWS WAF (regional) with an IP rate-limit rule ----------
+  # Protects the REST API from request floods / abuse. A single source IP that
+  # exceeds WafRateLimit requests in a rolling 5-minute window is blocked (403).
+  ApiWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "cv-enhancer-${StageName}-web-acl"
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "cv-enhancer-${StageName}-web-acl"
+      Rules:
+        - Name: RateLimitPerIp
+          Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref WafRateLimit
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "cv-enhancer-${StageName}-rate-limit"
+        # AWS-managed baseline rules (common exploits + known bad inputs).
+        - Name: AWSManagedCommon
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "cv-enhancer-${StageName}-common"
+
+  # Associate the Web ACL with the API Gateway stage.
+  ApiWebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/${CvEnhancerApi}/stages/${StageName}"
+      WebACLArn: !GetAtt ApiWebAcl.Arn
+
   # ---------- Static website bucket for the frontend ----------
   # CI syncs index.html / app.js / styles.css / config.js here. This bucket is
   # intentionally public-read (static site), unlike the private ResultsBucket.
@@ -523,3 +579,6 @@ Outputs:
   FrontendWebsiteUrl:
     Description: Public URL of the CV Enhancer frontend.
     Value: !GetAtt FrontendBucket.WebsiteURL
+  WebAclArn:
+    Description: AWS WAF Web ACL protecting the API (IP rate limit + managed rules).
+    Value: !GetAtt ApiWebAcl.Arn

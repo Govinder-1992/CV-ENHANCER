@@ -127,6 +127,7 @@ Parameters (saved in `samconfig.toml`; use `sam deploy --guided` to change them)
 | `NotificationEmail`     | *(empty)*                                    | Optional admin subscriber               |
 | `DownloadUrlTtlSeconds` | `86400`                                      | Presigned URL lifetime                  |
 | `AuthMode`              | `NONE`                                       | `NONE` (public) or `API_KEY`            |
+| `WafRateLimit`          | `500`                                        | Max requests per IP per 5-min (WAF)     |
 
 ### Step 5 — Read the stack outputs
 
@@ -245,6 +246,10 @@ and `.../analysis.json`. The analysis JSON contains `matchScore`, `summary`,
 
 ## Security
 
+- **AWS WAF on the API** — a regional Web ACL with an **IP rate-limit rule**
+  (default 500 requests per IP per 5-minute window; configurable via the
+  `WafRateLimit` parameter) blocks floods/abuse with HTTP 403, plus the
+  AWS-managed common rule set for baseline protection.
 - **Original CV is never stored** — only the enhanced CV + analysis go to S3.
 - **Encryption at rest** — S3 uses SSE-S3 (AES256); SQS uses SQS-managed SSE.
 - **Private results bucket** — all public access blocked, TLS enforced, objects
