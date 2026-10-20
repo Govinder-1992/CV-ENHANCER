@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Upload your CV and get an AI-enhanced version tailored to your target job role." />
+  <title>CV Enhancer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="#">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <path d="M14 2v6h6" />
+            <path d="m9 15 2 2 4-4" />
+          </svg>
+        </span>
+        <span class="brand-text">CV&nbsp;Enhancer</span>
+      </a>
+      <nav class="header-nav">
+        <a href="#how-it-works">How it works</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container">
+        <h1>Make your CV land the interview.</h1>
+        <p class="hero-sub">
+          Upload your CV, tell us the role you're targeting, and get a polished,
+          job-tailored version back. Your original file never touches a bucket you
+          don't control.
+        </p>
+      </div>
+    </section>
+
+    <section class="form-section">
+      <div class="container">
+        <form id="cv-form" class="card" novalidate>
+          <h2 class="card-title">Analyze your CV</h2>
+
+          <!-- File upload -->
+          <div class="field">
+            <label class="field-label" for="cv-file">Your CV <span class="req">*</span></label>
+            <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload your CV, PDF or DOCX">
+              <input
+                type="file"
+                id="cv-file"
+                name="cv-file"
+                accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                hidden
+              />
+              <div class="dropzone-inner">
+                <svg class="dz-icon" viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+                <p class="dz-primary"><span class="dz-browse">Click to upload</span> or drag &amp; drop</p>
+                <p class="dz-hint" id="dz-hint">PDF or DOCX</p>
+              </div>
+            </div>
+
+            <div id="file-info" class="file-info" hidden>
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path d="M14 2v6h6" />
+              </svg>
+              <span id="file-name" class="file-name"></span>
+              <span id="file-size" class="file-size"></span>
+              <button type="button" id="remove-file" class="file-remove" aria-label="Remove file">&times;</button>
+            </div>
+
+            <p class="error-text" id="file-error" role="alert"></p>
+          </div>
+
+          <!-- Job role -->
+          <div class="field">
+            <label class="field-label" for="job-role">Desired job role <span class="req">*</span></label>
+            <input
+              type="text"
+              id="job-role"
+              name="job-role"
+              class="text-input"
+              placeholder="e.g. Senior Frontend Engineer"
+              autocomplete="organization-title"
+            />
+            <p class="error-text" id="role-error" role="alert"></p>
+          </div>
+
+          <!-- Job description -->
+          <div class="field">
+            <label class="field-label" for="job-description">Job description <span class="req">*</span></label>
+            <textarea
+              id="job-description"
+              name="job-description"
+              class="text-input textarea"
+              rows="6"
+              placeholder="Paste the job description you're applying for..."
+            ></textarea>
+            <div class="field-foot">
+              <p class="error-text" id="desc-error" role="alert"></p>
+              <span class="char-count" id="desc-count">0 characters</span>
+            </div>
+          </div>
+
+          <!-- Email -->
+          <div class="field">
+            <label class="field-label" for="email">Email address <span class="req">*</span></label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              class="text-input"
+              placeholder="you@example.com"
+              autocomplete="email"
+            />
+            <p class="field-note">We'll send your enhanced CV and a download link to this address.</p>
+            <p class="error-text" id="email-error" role="alert"></p>
+          </div>
+
+          <button type="submit" id="submit-btn" class="btn-primary">
+            <span class="btn-label">Analyze CV</span>
+            <span class="spinner" aria-hidden="true"></span>
+          </button>
+
+          <!-- Status / progress -->
+          <div id="status-panel" class="status-panel" hidden aria-live="polite">
+            <div class="status-row">
+              <span id="status-icon" class="status-icon"></span>
+              <span id="status-text" class="status-text"></span>
+            </div>
+            <div class="progress-track" id="progress-track" hidden>
+              <div class="progress-bar" id="progress-bar"></div>
+            </div>
+            <div id="result-box" class="result-box" hidden>
+              <p class="result-title">Your enhanced CV is ready.</p>
+              <a id="download-link" class="btn-download" href="#" target="_blank" rel="noopener noreferrer" download>
+                Download enhanced CV
+              </a>
+            </div>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section id="how-it-works" class="how">
+      <div class="container">
+        <h2 class="how-title">How it works</h2>
+        <ol class="steps">
+          <li class="step">
+            <span class="step-num">1</span>
+            <h3>Upload &amp; describe</h3>
+            <p>Add your CV and the role you want. Everything is validated in your browser first.</p>
+          </li>
+          <li class="step">
+            <span class="step-num">2</span>
+            <h3>Secure processing</h3>
+            <p>Your details go to our API Gateway endpoint for analysis. The original file isn't pushed straight to S3.</p>
+          </li>
+          <li class="step">
+            <span class="step-num">3</span>
+            <h3>Download result</h3>
+            <p>Get a tailored, enhanced CV with a download link, also sent to your email.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>&copy; <span id="year"></span> CV Enhancer. Your data is processed securely.</p>
+    </div>
+  </footer>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

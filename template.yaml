@@ -1,0 +1,525 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  CV Enhancer - API Gateway integrates DIRECTLY with Amazon SQS (no producer
+  Lambda). A worker Lambda consumes the queue: it validates the CV, extracts
+  text, enhances it with Amazon Bedrock, stores the enhanced CV + analysis in S3
+  (KMS-encrypted), and sends an SNS completion notification. The original CV is
+  never stored in S3.
+
+Parameters:
+  StageName:
+    Type: String
+    Default: prod
+    Description: API Gateway stage name.
+  BedrockModelId:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    Description: >
+      Bedrock model/inference-profile id used for CV analysis/enhancement.
+      Anthropic models in this account require an inference profile (e.g. the
+      cross-region 'us.' prefix), not a bare foundation-model id.
+  MaxFileSizeMb:
+    Type: Number
+    Default: 5
+    Description: Maximum accepted CV size in megabytes (worker-side check).
+  CorsAllowOrigin:
+    Type: String
+    Default: "*"
+    Description: Allowed CORS origin for the frontend (set to your site origin in prod).
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: Optional email to subscribe to the SNS completion topic.
+  DownloadUrlTtlSeconds:
+    Type: Number
+    Default: 86400
+    Description: Lifetime of the presigned download URL (seconds).
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues: [DEBUG, INFO, WARNING, ERROR]
+  AuthMode:
+    Type: String
+    Default: NONE
+    AllowedValues: [NONE, API_KEY]
+    Description: >
+      Authentication for POST /analyze-cv. NONE = public (browser calls it
+      directly). API_KEY = require an 'x-api-key' header tied to a usage plan.
+
+Conditions:
+  HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+  UseApiKey: !Equals [!Ref AuthMode, API_KEY]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    MemorySize: 1024
+    Timeout: 120
+    Tracing: Active
+    Architectures: [arm64]
+
+Resources:
+  # ---------- S3 bucket for ENHANCED results only ----------
+  # Encryption at rest uses AWS-managed SSE-S3 (AES256) — no customer KMS key.
+  ResultsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          # Delete enhanced CV + analysis results 30 days after creation.
+          - Id: ExpireResults
+            Status: Enabled
+            Prefix: results/
+            ExpirationInDays: 30
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 7
+          # Clean up storage for failed/incomplete multipart uploads.
+          - Id: AbortIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      VersioningConfiguration:
+        Status: Enabled
+
+  ResultsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ResultsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Reject any non-TLS request.
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ResultsBucket.Arn
+              - !Sub "${ResultsBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+          # Reject uploads that aren't server-side encrypted (SSE-S3 / AES256).
+          - Sid: DenyUnEncryptedObjectUploads
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:PutObject"
+            Resource: !Sub "${ResultsBucket.Arn}/*"
+            Condition:
+              StringNotEquals:
+                "s3:x-amz-server-side-encryption": "AES256"
+
+  # ---------- SNS topic for completion notifications ----------
+  # The worker publishes success/failure here. Per-user email subscriptions are
+  # created on demand by the worker with a filter policy keyed on "email", so a
+  # message is only delivered to the matching (confirmed) recipient.
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: CV Enhancer
+
+  # Optional admin subscription for monitoring ALL notifications (not a user).
+  # Has no filter policy, so it receives every message.
+  NotificationSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasNotificationEmail
+    Properties:
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+      TopicArn: !Ref NotificationTopic
+
+  # Notification delivery logging: the worker emits structured CloudWatch logs
+  # for every publish (subscriptionState + success/failure) in notifications.py.
+  # SNS email protocol doesn't support topic-level delivery-status feedback, so
+  # the worker-side logs are the source of truth for notification auditing.
+
+  # ---------- Dead-letter queue ----------
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600 # 14 days
+      SqsManagedSseEnabled: true
+
+  # ---------- Main job queue (API Gateway -> SQS -> worker Lambda) ----------
+  JobQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "cv-enhancer-jobs-${StageName}"
+      # Give the worker time to run Bedrock before the message reappears.
+      VisibilityTimeout: 180
+      MessageRetentionPeriod: 86400 # 1 day
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  # ---------- IAM role that lets API Gateway send to the queue ----------
+  ApiGatewayToSqsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SendToJobQueue
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt JobQueue.Arn
+
+  # ---------- Worker Lambda (SQS triggered) ----------
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "cv-enhancer-worker-${StageName}"
+      CodeUri: src/
+      Handler: app.worker.lambda_handler
+      Environment:
+        Variables:
+          RESULTS_BUCKET: !Ref ResultsBucket
+          NOTIFICATION_TOPIC_ARN: !Ref NotificationTopic
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          MAX_FILE_SIZE_MB: !Ref MaxFileSizeMb
+          DOWNLOAD_URL_TTL_SECONDS: !Ref DownloadUrlTtlSeconds
+          CORS_ALLOW_ORIGIN: !Ref CorsAllowOrigin
+          LOG_LEVEL: !Ref LogLevel
+      Policies:
+        - Statement:
+            - Sid: WriteResultsToS3
+              Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+              Resource: !Sub "${ResultsBucket.Arn}/results/*"
+            - Sid: PublishNotifications
+              Effect: Allow
+              Action: sns:Publish
+              Resource: !Ref NotificationTopic
+            # Allow on-demand, per-user email subscriptions (with filter policy)
+            # so each user is notified at their own verified address.
+            - Sid: ManagePerUserSubscriptions
+              Effect: Allow
+              Action:
+                - sns:Subscribe
+                - sns:ListSubscriptionsByTopic
+                - sns:SetSubscriptionAttributes
+                - sns:GetSubscriptionAttributes
+              Resource: !Ref NotificationTopic
+            - Sid: InvokeBedrockModel
+              Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+              Resource:
+                # The inference profile the worker invokes...
+                - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+                # ...and the underlying foundation models it routes to. A 'us.'
+                # cross-region profile can run the model in any US region, so
+                # allow foundation-model in all regions (account-less ARN).
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+      Events:
+        JobQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt JobQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  WorkerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/cv-enhancer-worker-${StageName}"
+      RetentionInDays: 30
+
+  # ---------- API Gateway (direct AWS -> SQS integration) ----------
+  CvEnhancerApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref StageName
+      TracingEnabled: true
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 20
+          ThrottlingRateLimit: 10
+          MetricsEnabled: true
+      GatewayResponses:
+        BAD_REQUEST_BODY:
+          StatusCode: 400
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${CorsAllowOrigin}'"
+              Access-Control-Allow-Headers: "'Content-Type, x-api-key'"
+          ResponseTemplates:
+            application/json: '{"error":"validation_error","message":"Request failed validation. Check required fields, file type (pdf/docx), and email format.","requestId":"$context.requestId"}'
+        UNAUTHORIZED:
+          StatusCode: 401
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${CorsAllowOrigin}'"
+          ResponseTemplates:
+            application/json: '{"error":"unauthorized","message":"Missing or invalid API key.","requestId":"$context.requestId"}'
+        THROTTLED:
+          StatusCode: 429
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${CorsAllowOrigin}'"
+          ResponseTemplates:
+            application/json: '{"error":"too_many_requests","message":"Rate limit exceeded. Please retry shortly.","requestId":"$context.requestId"}'
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${CorsAllowOrigin}'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${CorsAllowOrigin}'"
+          ResponseTemplates:
+            application/json: '{"error":"internal_error","message":"An unexpected error occurred.","requestId":"$context.requestId"}'
+      DefinitionBody:
+        openapi: "3.0.1"
+        info:
+          title: !Sub "cv-enhancer-${StageName}"
+        paths:
+          /analyze-cv:
+            post:
+              # Gateway-side body validation before anything is enqueued.
+              x-amazon-apigateway-request-validator: validate-body
+              security: !If
+                - UseApiKey
+                - [{ api_key: [] }]
+                - []
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: "#/components/schemas/AnalyzeCvRequest"
+              responses:
+                "202":
+                  description: Accepted
+                  headers:
+                    Access-Control-Allow-Origin:
+                      schema:
+                        type: string
+              x-amazon-apigateway-integration:
+                type: aws
+                httpMethod: POST
+                uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${JobQueue.QueueName}"
+                credentials: !GetAtt ApiGatewayToSqsRole.Arn
+                passthroughBehavior: never
+                requestParameters:
+                  integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+                requestTemplates:
+                  # Enqueue the raw request body; stamp the gateway requestId as a
+                  # message attribute so the worker can echo it back.
+                  application/json: >-
+                    Action=SendMessage&MessageAttribute.1.Name=requestId&MessageAttribute.1.Value.StringValue=$context.requestId&MessageAttribute.1.Value.DataType=String&MessageBody=$util.urlEncode($input.body)
+                responses:
+                  default:
+                    statusCode: "202"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsAllowOrigin}'"
+                    responseTemplates:
+                      # Return a clean requestId + status to the frontend.
+                      application/json: '{"requestId":"$context.requestId","status":"processing","message":"Your CV was accepted and is being processed. You will receive an email when it is ready."}'
+                  "4\\d{2}":
+                    statusCode: "400"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsAllowOrigin}'"
+                    responseTemplates:
+                      application/json: '{"error":"bad_request","message":"The request could not be queued.","requestId":"$context.requestId"}'
+                  "5\\d{2}":
+                    statusCode: "500"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsAllowOrigin}'"
+                    responseTemplates:
+                      application/json: '{"error":"internal_error","message":"Could not accept the request.","requestId":"$context.requestId"}'
+            options:
+              # CORS preflight handled entirely by API Gateway (mock integration).
+              responses:
+                "204":
+                  description: CORS preflight
+                  headers:
+                    Access-Control-Allow-Origin:
+                      schema: { type: string }
+                    Access-Control-Allow-Methods:
+                      schema: { type: string }
+                    Access-Control-Allow-Headers:
+                      schema: { type: string }
+              x-amazon-apigateway-integration:
+                type: mock
+                requestTemplates:
+                  application/json: '{"statusCode": 204}'
+                responses:
+                  default:
+                    statusCode: "204"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsAllowOrigin}'"
+                      method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Content-Type, x-api-key'"
+                    responseTemplates:
+                      application/json: ""
+        components:
+          securitySchemes:
+            api_key:
+              type: apiKey
+              name: x-api-key
+              in: header
+          schemas:
+            AnalyzeCvRequest:
+              type: object
+              required:
+                - fileName
+                - fileType
+                - fileContentBase64
+                - jobRole
+                - jobDescription
+                - email
+              additionalProperties: true
+              properties:
+                fileName:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                fileType:
+                  type: string
+                  enum: [pdf, docx]
+                fileContentBase64:
+                  type: string
+                  minLength: 1
+                jobRole:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                jobDescription:
+                  type: string
+                  minLength: 20
+                  maxLength: 20000
+                email:
+                  type: string
+                  pattern: "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+                  maxLength: 320
+        x-amazon-apigateway-request-validators:
+          validate-body:
+            validateRequestBody: true
+            validateRequestParameters: false
+
+  # ---------- Optional API key + usage plan (AuthMode = API_KEY) ----------
+  CvEnhancerApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Condition: UseApiKey
+    Properties:
+      Name: !Sub "cv-enhancer-${StageName}-key"
+      Enabled: true
+      StageKeys:
+        - RestApiId: !Ref CvEnhancerApi
+          StageName: !Ref StageName
+
+  CvEnhancerUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Condition: UseApiKey
+    Properties:
+      UsagePlanName: !Sub "cv-enhancer-${StageName}-plan"
+      ApiStages:
+        - ApiId: !Ref CvEnhancerApi
+          Stage: !Ref StageName
+      Throttle:
+        BurstLimit: 20
+        RateLimit: 10
+      Quota:
+        Limit: 1000
+        Period: DAY
+
+  CvEnhancerUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Condition: UseApiKey
+    Properties:
+      KeyId: !Ref CvEnhancerApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref CvEnhancerUsagePlan
+
+  # ---------- Static website bucket for the frontend ----------
+  # CI syncs index.html / app.js / styles.css / config.js here. This bucket is
+  # intentionally public-read (static site), unlike the private ResultsBucket.
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: false
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: false
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadStaticSite
+            Effect: Allow
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+
+Outputs:
+  ApiEndpoint:
+    Description: POST your CV + job details here (set as API_ENDPOINT in the frontend config.js).
+    Value: !Sub "https://${CvEnhancerApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/analyze-cv"
+  ApiKeyId:
+    Condition: UseApiKey
+    Description: >
+      API key id (AuthMode=API_KEY). Retrieve the secret value with:
+      aws apigateway get-api-key --api-key <id> --include-value
+    Value: !Ref CvEnhancerApiKey
+  JobQueueUrl:
+    Description: SQS queue that API Gateway writes to and the worker Lambda consumes.
+    Value: !Ref JobQueue
+  ResultsBucketName:
+    Description: Bucket holding ENHANCED CVs + analysis (never the original CV).
+    Value: !Ref ResultsBucket
+  NotificationTopicArn:
+    Description: SNS topic for completion notifications.
+    Value: !Ref NotificationTopic
+  WorkerFunctionName:
+    Value: !Ref WorkerFunction
+  FrontendBucketName:
+    Description: S3 bucket hosting the static frontend (CI syncs files here).
+    Value: !Ref FrontendBucket
+  FrontendWebsiteUrl:
+    Description: Public URL of the CV Enhancer frontend.
+    Value: !GetAtt FrontendBucket.WebsiteURL

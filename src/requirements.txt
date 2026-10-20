@@ -1,0 +1,4 @@
+# Runtime dependencies for the CV Enhancer Lambda.
+# boto3/botocore are provided by the Lambda runtime, so they are not pinned here.
+pypdf==4.3.1
+python-docx==1.1.2

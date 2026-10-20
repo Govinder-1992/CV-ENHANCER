@@ -1,0 +1,148 @@
+name: Deploy CV Enhancer (SAM)
+
+# Build, package, and deploy the SAM stack (API Gateway + SQS + worker Lambda)
+# on every push to main. AWS credentials come from repository secrets.
+
+on:
+  push:
+    branches: [main]
+    # Run on backend/infra OR frontend changes.
+    paths:
+      - "src/**"
+      - "template.yaml"
+      - "samconfig.toml"
+      - "index.html"
+      - "app.js"
+      - "styles.css"
+      - "config.js"
+      - ".github/workflows/deploy.yml"
+  # Allow manual runs from the Actions tab.
+  workflow_dispatch:
+
+# Avoid overlapping deploys stepping on each other.
+concurrency:
+  group: sam-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  SAM_TEMPLATE: template.yaml
+  STACK_NAME: ${{ vars.STACK_NAME || 'sam-app' }}
+
+jobs:
+  deploy:
+    name: Build & deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: SAM validate
+        run: sam validate --lint --template "${{ env.SAM_TEMPLATE }}" --region "${{ env.AWS_REGION }}"
+
+      - name: SAM build
+        run: sam build --template "${{ env.SAM_TEMPLATE }}"
+
+      - name: SAM deploy
+        run: |
+          sam deploy \
+            --stack-name "${{ env.STACK_NAME }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --resolve-s3 \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --no-progressbar
+
+  frontend:
+    name: Publish frontend
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Read stack outputs
+        id: outputs
+        run: |
+          API_ENDPOINT=$(aws cloudformation describe-stacks \
+            --stack-name "${{ env.STACK_NAME }}" --region "${{ env.AWS_REGION }}" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text)
+          BUCKET=$(aws cloudformation describe-stacks \
+            --stack-name "${{ env.STACK_NAME }}" --region "${{ env.AWS_REGION }}" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" --output text)
+          WEBSITE=$(aws cloudformation describe-stacks \
+            --stack-name "${{ env.STACK_NAME }}" --region "${{ env.AWS_REGION }}" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendWebsiteUrl'].OutputValue" --output text)
+          echo "api_endpoint=$API_ENDPOINT" >> "$GITHUB_OUTPUT"
+          echo "bucket=$BUCKET" >> "$GITHUB_OUTPUT"
+          echo "website=$WEBSITE" >> "$GITHUB_OUTPUT"
+
+      - name: Inject API endpoint into config.js
+        run: |
+          # Replace the API_ENDPOINT line with the live value from the stack.
+          python - "${{ steps.outputs.outputs.api_endpoint }}" <<'PY'
+          import re, sys
+          endpoint = sys.argv[1]
+          with open("config.js", "r", encoding="utf-8") as f:
+              content = f.read()
+          content = re.sub(
+              r'API_ENDPOINT:\s*"[^"]*"',
+              f'API_ENDPOINT: "{endpoint}"',
+              content,
+              count=1,
+          )
+          with open("config.js", "w", encoding="utf-8") as f:
+              f.write(content)
+          print("Set API_ENDPOINT =", endpoint)
+          PY
+
+      - name: Sync frontend to S3
+        run: |
+          # Long-cache static assets, but never cache index.html / config.js so
+          # endpoint/config changes take effect immediately.
+          aws s3 sync . "s3://${{ steps.outputs.outputs.bucket }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --delete \
+            --exclude "*" \
+            --include "index.html" \
+            --include "app.js" \
+            --include "styles.css" \
+            --include "config.js" \
+            --cache-control "public,max-age=86400"
+          # Re-upload the two files that must not be cached.
+          aws s3 cp index.html "s3://${{ steps.outputs.outputs.bucket }}/index.html" \
+            --region "${{ env.AWS_REGION }}" --cache-control "no-cache" --content-type "text/html"
+          aws s3 cp config.js "s3://${{ steps.outputs.outputs.bucket }}/config.js" \
+            --region "${{ env.AWS_REGION }}" --cache-control "no-cache" --content-type "application/javascript"
+
+      - name: Done
+        run: echo "Frontend published to ${{ steps.outputs.outputs.website }}"

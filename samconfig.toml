@@ -1,0 +1,14 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "sam-app"
+resolve_s3 = true
+s3_prefix = "sam-app"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_NAMED_IAM"
+parameter_overrides = "StageName=\"prod\" BedrockModelId=\"us.anthropic.claude-haiku-4-5-20251001-v1:0\" MaxFileSizeMb=\"5\" CorsAllowOrigin=\"*\" NotificationEmail=\"\" DownloadUrlTtlSeconds=\"86400\" LogLevel=\"INFO\""
+image_repositories = []
+
+[default.global.parameters]
+region = "us-east-1"

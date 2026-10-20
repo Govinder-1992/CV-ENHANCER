@@ -1,0 +1,23 @@
+# SAM / build artifacts
+.aws-sam/
+samconfig-*.toml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Diagram render output (generated)
+diagram/*.png
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Local scratch
+msgs.json
+inf.json
+out.json
+evt.json
