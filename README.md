@@ -9,9 +9,11 @@ the job, rewrites/enhances it with **Amazon Bedrock**, stores the result in
 Amazon S3, and emails a secure download link — **without ever storing the
 original CV**.
 
-- **Frontend** — a static, responsive single-page site (HTML/CSS/JS).
-- **Backend** — API Gateway → SQS → worker Lambda → Bedrock → S3 → SNS,
+- **Frontend** — a static, responsive single-page site (HTML/CSS/JS) hosted on S3.
+- **Backend** — AWS WAF → API Gateway → SQS → worker Lambda → Bedrock → S3 → SNS,
   defined as infrastructure-as-code with AWS SAM.
+- **Security** — AWS WAF with an IP rate-limit rule guards the API; the original
+  CV is never stored; data is encrypted at rest.
 - **CI/CD** — GitHub Actions deploys the backend and publishes the frontend on
   every push to `main`.
 
@@ -37,8 +39,9 @@ request is queued for processing.
 
 ### Request flow
 
-1. **User → Amazon API Gateway** — the browser sends `POST /analyze-cv` with the
-   CV (base64) and job details. API Gateway validates the request body.
+1. **User → AWS WAF → Amazon API Gateway** — the browser sends `POST /analyze-cv`
+   with the CV (base64) and job details. AWS WAF applies the IP rate-limit rule,
+   then API Gateway validates the request body.
 2. **API Gateway → Amazon SQS** — a direct AWS service integration puts the job
    on the queue (`SendMessage`). The API immediately returns `202 { requestId }`.
 3. **SQS → Worker Lambda** — the queue triggers the worker (one message at a time).

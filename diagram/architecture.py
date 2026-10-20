@@ -19,6 +19,7 @@ from diagrams.aws.compute import Lambda
 from diagrams.aws.ml import Bedrock
 from diagrams.aws.storage import SimpleStorageServiceS3
 from diagrams.aws.network import APIGateway
+from diagrams.aws.security import WAF
 from diagrams.aws.management import Cloudwatch
 from diagrams.onprem.client import User
 
@@ -40,6 +41,7 @@ with Diagram(
     user = User("User\n(Browser SPA)")
 
     with Cluster("AWS Cloud - us-east-1"):
+        waf = WAF("AWS WAF\nIP rate limit")
         api = APIGateway("API Gateway\nPOST /analyze-cv")
 
         with Cluster("Async processing"):
@@ -54,7 +56,8 @@ with Diagram(
         logs = Cloudwatch("CloudWatch\nLogs + X-Ray")
 
         # Main request flow
-        user >> Edge(label="1. CV + job details") >> api
+        user >> Edge(label="1. CV + job details") >> waf
+        waf >> Edge(label="rate-limited") >> api
         api >> Edge(label="2. SendMessage") >> queue
         queue >> Edge(label="3. trigger") >> worker
         worker >> Edge(label="4. enhance") >> bedrock
