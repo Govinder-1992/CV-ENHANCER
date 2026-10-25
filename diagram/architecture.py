@@ -21,8 +21,7 @@ from diagrams.aws.storage import SimpleStorageServiceS3
 from diagrams.aws.network import APIGateway
 from diagrams.aws.security import WAF
 from diagrams.aws.management import Cloudwatch
-from diagrams.aws.devtools import Codepipeline
-from diagrams.onprem.client import User
+from diagrams.onprem.client import User, Client
 from diagrams.onprem.vcs import Github
 
 graph_attr = {
@@ -42,14 +41,15 @@ with Diagram(
     direction="LR",
     graph_attr=graph_attr,
 ):
-    user = User("User\n(Browser)")
+    user = User("User")
+
+    with Cluster("Local machine"):
+        spa = Client("Frontend SPA\n(run locally)")
 
     with Cluster("CI/CD"):
-        gh = Github("GitHub Actions\n(SAM deploy + sync)")
+        gh = Github("GitHub Actions\n(SAM deploy)")
 
     with Cluster("AWS Cloud - us-east-1"):
-        site = SimpleStorageServiceS3("S3 Static Site\n(frontend SPA)")
-
         with Cluster("Edge / API"):
             waf = WAF("AWS WAF\nIP rate limit")
             api = APIGateway("API Gateway\nPOST /analyze-cv")
@@ -67,8 +67,8 @@ with Diagram(
         logs = Cloudwatch("CloudWatch\nLogs + X-Ray")
 
         # Request flow
-        user >> Edge(label="1. load site") >> site
-        user >> Edge(label="2. submit CV + job details") >> waf
+        user >> Edge(label="1. open") >> spa
+        spa >> Edge(label="2. submit CV + job details") >> waf
         waf >> Edge(label="rate-limited") >> api
         api >> Edge(label="3. SendMessage") >> queue
         queue >> Edge(label="4. trigger") >> worker
@@ -81,6 +81,5 @@ with Diagram(
         queue >> Edge(label="after 3 retries", style="dashed", color="firebrick") >> dlq
         worker >> Edge(style="dotted", color="gray", label="logs") >> logs
 
-    # CI/CD deploys the stack and publishes the frontend
+    # CI/CD deploys the backend stack
     gh >> Edge(style="dotted", color="darkgreen", label="deploy") >> api
-    gh >> Edge(style="dotted", color="darkgreen", label="publish") >> site

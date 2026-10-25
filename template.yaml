@@ -61,6 +61,15 @@ Parameters:
     Description: >
       AWS WAF rate limit: max requests allowed from a single IP in any rolling
       5-minute window. Requests beyond this are blocked with HTTP 403.
+  MockBedrock:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      TEST ONLY. When "true", the worker returns a canned enhancement instead of
+      calling Amazon Bedrock — lets you verify the full pipeline (S3 + SNS +
+      download link) without spending tokens / hitting the daily quota. Keep
+      "false" in production.
 
 Conditions:
   HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
@@ -216,6 +225,7 @@ Resources:
           RESULTS_BUCKET: !Ref ResultsBucket
           NOTIFICATION_TOPIC_ARN: !Ref NotificationTopic
           BEDROCK_MODEL_ID: !Ref BedrockModelId
+          MOCK_BEDROCK: !Ref MockBedrock
           MAX_FILE_SIZE_MB: !Ref MaxFileSizeMb
           DOWNLOAD_URL_TTL_SECONDS: !Ref DownloadUrlTtlSeconds
           CORS_ALLOW_ORIGIN: !Ref CorsAllowOrigin
@@ -527,41 +537,6 @@ Resources:
       ResourceArn: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/${CvEnhancerApi}/stages/${StageName}"
       WebACLArn: !GetAtt ApiWebAcl.Arn
 
-  # ---------- Static website bucket for the frontend ----------
-  # CI syncs index.html / app.js / styles.css / config.js here. This bucket is
-  # intentionally public-read (static site), unlike the private ResultsBucket.
-  FrontendBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: false
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: false
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      WebsiteConfiguration:
-        IndexDocument: index.html
-        ErrorDocument: index.html
-
-  FrontendBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref FrontendBucket
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: PublicReadStaticSite
-            Effect: Allow
-            Principal: "*"
-            Action: "s3:GetObject"
-            Resource: !Sub "${FrontendBucket.Arn}/*"
-
 Outputs:
   ApiEndpoint:
     Description: POST your CV + job details here (set as API_ENDPOINT in the frontend config.js).
@@ -583,12 +558,6 @@ Outputs:
     Value: !Ref NotificationTopic
   WorkerFunctionName:
     Value: !Ref WorkerFunction
-  FrontendBucketName:
-    Description: S3 bucket hosting the static frontend (CI syncs files here).
-    Value: !Ref FrontendBucket
-  FrontendWebsiteUrl:
-    Description: Public URL of the CV Enhancer frontend.
-    Value: !GetAtt FrontendBucket.WebsiteURL
   WebAclArn:
     Condition: WafEnabled
     Description: AWS WAF Web ACL protecting the API (IP rate limit + managed rules).

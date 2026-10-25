@@ -9,13 +9,12 @@ the job, rewrites/enhances it with **Amazon Bedrock**, stores the result in
 Amazon S3, and emails a secure download link — **without ever storing the
 original CV**.
 
-- **Frontend** — a static, responsive single-page site (HTML/CSS/JS) hosted on S3.
+- **Frontend** — a static, responsive single-page site (HTML/CSS/JS) run locally.
 - **Backend** — AWS WAF → API Gateway → SQS → worker Lambda → Bedrock → S3 → SNS,
   defined as infrastructure-as-code with AWS SAM.
 - **Security** — AWS WAF with an IP rate-limit rule guards the API; the original
   CV is never stored; data is encrypted at rest.
-- **CI/CD** — GitHub Actions deploys the backend and publishes the frontend on
-  every push to `main`.
+- **CI/CD** — GitHub Actions deploys the backend on every push to `main`.
 
 ---
 
@@ -140,22 +139,12 @@ aws cloudformation describe-stacks --stack-name sam-app --region us-east-1 --que
 ```
 
 - `ApiEndpoint` → set as `API_ENDPOINT` in `config.js`.
-- `FrontendWebsiteUrl` → the public site URL.
 - `ResultsBucketName` → where enhanced CVs/analysis are stored.
 
-### Step 6 — Publish the frontend
+### Step 6 — Run the frontend (locally)
 
-The CI pipeline does this automatically, or manually:
-
-```powershell
-# replace <FrontendBucketName> with the stack output
-aws s3 sync . "s3://<FrontendBucketName>" --exclude "*" `
-  --include "index.html" --include "app.js" --include "styles.css" --include "config.js"
-```
-
-### Step 7 — Test
-
-Open `FrontendWebsiteUrl`, or run locally:
+The frontend is a static site you run locally; it calls the deployed API.
+Set `API_ENDPOINT` in `config.js` to the `ApiEndpoint` output, then:
 
 ```powershell
 python -m http.server 8080   # then open http://localhost:8080
@@ -178,11 +167,11 @@ aws s3 ls s3://<ResultsBucketName>/results/ --recursive --region us-east-1
 ## CI/CD with GitHub Actions
 
 `.github/workflows/deploy.yml` runs on every push to `main` (and manual
-dispatch) with two jobs:
+dispatch) with one job:
 
-1. **deploy** — `sam validate` → `sam build` → `sam deploy`.
-2. **frontend** — reads `ApiEndpoint` from the stack outputs, injects it into
-   `config.js`, and syncs the static site to the frontend S3 bucket.
+1. **deploy** — `sam validate` → `sam build` → `sam deploy` the backend stack.
+
+The frontend is not hosted; run it locally (see Step 6).
 
 ### Set up the pipeline
 
