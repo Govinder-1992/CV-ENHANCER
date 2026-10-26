@@ -12,7 +12,7 @@
 window.CV_ENHANCER_CONFIG = {
   // Amazon API Gateway endpoint that accepts the analyze request.
   // Use the 'ApiEndpoint' value from the SAM deploy outputs (ends in /analyze-cv).
-  API_ENDPOINT: "https://4ay7x86f00.execute-api.us-east-1.amazonaws.com/prod/analyze-cv",
+  API_ENDPOINT: "https://xt3ykdvev2.execute-api.us-east-1.amazonaws.com/prod/analyze-cv",
 
   // API key for the 'x-api-key' header. Required only if you deployed with
   // AuthMode=API_KEY; leave empty for the default public (NONE) mode.

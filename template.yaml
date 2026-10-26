@@ -530,9 +530,13 @@ Resources:
             MetricName: !Sub "cv-enhancer-${StageName}-common"
 
   # Associate the Web ACL with the API Gateway stage.
+  # DependsOn the API so the stage exists before WAF tries to attach (otherwise
+  # WAF returns NotFound and the stack rolls back). CvEnhancerApi.Stage is the
+  # SAM-generated stage logical id for an AWS::Serverless::Api.
   ApiWebAclAssociation:
     Type: AWS::WAFv2::WebACLAssociation
     Condition: WafEnabled
+    DependsOn: CvEnhancerApiStage
     Properties:
       ResourceArn: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/${CvEnhancerApi}/stages/${StageName}"
       WebACLArn: !GetAtt ApiWebAcl.Arn
