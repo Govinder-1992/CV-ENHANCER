@@ -516,6 +516,10 @@ Resources:
             CloudWatchMetricsEnabled: true
             MetricName: !Sub "cv-enhancer-${StageName}-rate-limit"
         # AWS-managed baseline rules (common exploits + known bad inputs).
+        # SizeRestrictions_BODY (default 8 KB body cap) is overridden to Count
+        # instead of Block, because a base64-encoded CV exceeds 8 KB and would
+        # otherwise be rejected with 403. Actual size is still bounded by the
+        # worker (MaxFileSizeMb) and SQS's 256 KB message limit.
         - Name: AWSManagedCommon
           Priority: 1
           OverrideAction:
@@ -524,6 +528,10 @@ Resources:
             ManagedRuleGroupStatement:
               VendorName: AWS
               Name: AWSManagedRulesCommonRuleSet
+              RuleActionOverrides:
+                - Name: SizeRestrictions_BODY
+                  ActionToUse:
+                    Count: {}
           VisibilityConfig:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
