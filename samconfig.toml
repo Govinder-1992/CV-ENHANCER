@@ -4,10 +4,9 @@ version = 0.1
 stack_name = "sam-app"
 resolve_s3 = true
 s3_prefix = "sam-app"
-region = "us-east-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_NAMED_IAM"
-parameter_overrides = "StageName=\"prod\" BedrockModelId=\"us.anthropic.claude-haiku-4-5-20251001-v1:0\" MaxFileSizeMb=\"5\" CorsAllowOrigin=\"*\" NotificationEmail=\"\" DownloadUrlTtlSeconds=\"86400\" LogLevel=\"INFO\" EnableWaf=\"true\""
+parameter_overrides = "StageName=\"prod\" BedrockModelId=\"us.amazon.nova-2-lite-v1:0\" MaxFileSizeMb=\"5\" CorsAllowOrigin=\"*\" NotificationEmail=\"\" DownloadUrlTtlSeconds=\"86400\" LogLevel=\"INFO\" AuthMode=\"NONE\" EnableWaf=\"true\" WafRateLimit=\"500\" MockBedrock=\"false\""
 image_repositories = []
 
 [default.global.parameters]

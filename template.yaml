@@ -14,11 +14,12 @@ Parameters:
     Description: API Gateway stage name.
   BedrockModelId:
     Type: String
-    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    Default: us.amazon.nova-2-lite-v1:0
     Description: >
       Bedrock model/inference-profile id used for CV analysis/enhancement.
-      Anthropic models in this account require an inference profile (e.g. the
-      cross-region 'us.' prefix), not a bare foundation-model id.
+      Models in this account require an inference profile (e.g. the cross-region
+      'us.' prefix), not a bare foundation-model id. Default is Amazon Nova 2
+      Lite (cheaper/lighter); works via the Converse API like Claude.
   MaxFileSizeMb:
     Type: Number
     Default: 5
