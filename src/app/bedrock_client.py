@@ -23,6 +23,10 @@ logger = get_logger("cv_enhancer.bedrock")
 MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20240620-v1:0")
 MAX_TOKENS = int(os.environ.get("BEDROCK_MAX_TOKENS", "4000"))
 TEMPERATURE = float(os.environ.get("BEDROCK_TEMPERATURE", "0.3"))
+# Test mode: when "true", skip the real Bedrock call and return a deterministic
+# result. Lets you verify the full pipeline (S3 save + SNS email + download link)
+# without spending Bedrock tokens / hitting the daily quota. NOT for production.
+MOCK_BEDROCK = os.environ.get("MOCK_BEDROCK", "false").lower() == "true"
 
 # Bedrock throttling / server errors that are worth retrying via SQS-less retry.
 _TRANSIENT_CODES = {"ThrottlingException", "ModelTimeoutException", "ServiceUnavailableException",
@@ -97,8 +101,34 @@ def _extract_json(text: str) -> dict:
         raise BedrockError(f"Could not parse model JSON: {exc}") from exc
 
 
+def _mock_result(cv_text: str, job_role: str) -> dict:
+    """Deterministic stand-in for a real Bedrock response (test mode only)."""
+    log(logger, "WARNING", "MOCK_BEDROCK enabled: returning canned result (no tokens used)")
+    return {
+        "analysis": {
+            "matchScore": 75,
+            "summary": f"[MOCK] Candidate is a reasonable fit for the {job_role} role.",
+            "strengths": ["Relevant experience", "Clear structure"],
+            "missingSkills": ["(mock) add a quantified achievement"],
+            "recommendedKeywords": ["(mock) keyword 1", "(mock) keyword 2"],
+            "gaps": ["(mock) tailor the summary to the role"],
+            "suggestions": ["(mock) lead with impact metrics"],
+        },
+        "enhancedCv": (
+            "[MOCK ENHANCED CV]\n"
+            f"Target role: {job_role}\n\n"
+            "This is a mock enhancement used to verify the pipeline without\n"
+            "calling Amazon Bedrock. Original CV excerpt:\n\n"
+            + cv_text[:500]
+        ),
+    }
+
+
 def enhance_cv(cv_text: str, job_role: str, job_description: str) -> dict:
     """Call Bedrock and return a normalized analysis + enhanced CV dict."""
+    if MOCK_BEDROCK:
+        return _mock_result(cv_text, job_role)
+
     prompt = _USER_TEMPLATE.format(
         job_role=job_role, job_description=job_description, cv_text=cv_text
     )
