@@ -9,7 +9,10 @@ the job, rewrites/enhances it with **Amazon Bedrock**, stores the result in
 Amazon S3, and emails a secure download link — **without ever storing the
 original CV**.
 
-- **Frontend** — a static, responsive single-page site (HTML/CSS/JS) run locally.
+**Live demo:** https://govinder-1992.github.io/CV-ENHANCER/ (hosted on GitHub Pages)
+
+- **Frontend** — a static, responsive single-page site (HTML/CSS/JS) hosted on
+  GitHub Pages (HTTPS), or run locally.
 - **Backend** — AWS WAF → API Gateway → SQS → worker Lambda → Bedrock → S3 → SNS,
   defined as infrastructure-as-code with AWS SAM.
 - **Security** — AWS WAF with an IP rate-limit rule guards the API; the original
@@ -21,6 +24,8 @@ original CV**.
 ## Demo
 
 ![CV Enhancer frontend](docs/screenshot.png)
+
+Try it live: **https://govinder-1992.github.io/CV-ENHANCER/**
 
 The single-page app: upload a PDF/DOCX CV, enter the target role, job
 description, and email, then submit. Validation runs in the browser before the
@@ -171,7 +176,9 @@ dispatch) with one job:
 
 1. **deploy** — `sam validate` → `sam build` → `sam deploy` the backend stack.
 
-The frontend is not hosted; run it locally (see Step 6).
+A second workflow, `.github/workflows/pages.yml`, publishes the static frontend
+to **GitHub Pages** on pushes that touch a frontend file. Live at
+https://govinder-1992.github.io/CV-ENHANCER/ — or run it locally (see Step 6).
 
 ### Set up the pipeline
 
