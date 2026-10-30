@@ -21,7 +21,7 @@ from diagrams.aws.storage import SimpleStorageServiceS3
 from diagrams.aws.network import APIGateway
 from diagrams.aws.security import WAF
 from diagrams.aws.management import Cloudwatch
-from diagrams.onprem.client import User, Client
+from diagrams.onprem.client import User
 from diagrams.onprem.vcs import Github
 
 graph_attr = {
@@ -43,11 +43,9 @@ with Diagram(
 ):
     user = User("User")
 
-    with Cluster("Local machine"):
-        spa = Client("Frontend SPA\n(run locally)")
-
-    with Cluster("CI/CD"):
-        gh = Github("GitHub Actions\n(SAM deploy)")
+    with Cluster("CI/CD + Hosting (GitHub)"):
+        gh = Github("GitHub Actions")
+        pages = Github("GitHub Pages\n(frontend SPA, HTTPS)")
 
     with Cluster("AWS Cloud - us-east-1"):
         with Cluster("Edge / API"):
@@ -60,15 +58,15 @@ with Diagram(
             dlq = SimpleQueueServiceSqs("SQS\nDead-letter Queue")
 
         with Cluster("AI + storage + notify"):
-            bedrock = Bedrock("Bedrock\nAnalyze + Enhance")
+            bedrock = Bedrock("Bedrock\nNova 2 Lite\nAnalyze + Enhance")
             results = SimpleStorageServiceS3("S3 (private)\nEnhanced CV + Analysis")
             topic = SimpleNotificationServiceSns("SNS\nNotifications")
 
         logs = Cloudwatch("CloudWatch\nLogs + X-Ray")
 
         # Request flow
-        user >> Edge(label="1. open") >> spa
-        spa >> Edge(label="2. submit CV + job details") >> waf
+        user >> Edge(label="1. open site") >> pages
+        pages >> Edge(label="2. submit CV + job details") >> waf
         waf >> Edge(label="rate-limited") >> api
         api >> Edge(label="3. SendMessage") >> queue
         queue >> Edge(label="4. trigger") >> worker
@@ -81,5 +79,6 @@ with Diagram(
         queue >> Edge(label="after 3 retries", style="dashed", color="firebrick") >> dlq
         worker >> Edge(style="dotted", color="gray", label="logs") >> logs
 
-    # CI/CD deploys the backend stack
-    gh >> Edge(style="dotted", color="darkgreen", label="deploy") >> api
+    # CI/CD: GitHub Actions deploys the backend stack and publishes the frontend
+    gh >> Edge(style="dotted", color="darkgreen", label="deploy (SAM)") >> api
+    gh >> Edge(style="dotted", color="darkgreen", label="publish") >> pages
