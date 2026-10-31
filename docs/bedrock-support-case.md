@@ -20,17 +20,19 @@ request-service-quota-increase`. Only AWS can lift it, via account verification
 or a support case. A `0` cap almost always means the account is still in a
 new / unverified / free-trial state.
 
-## Fastest fix to try first: verify billing
+## Billing is already verified — go straight to the support case
 
-The zeroed cap is usually tied to an unverified or free-trial account.
+This account **already has a valid, verified payment method** (Visa on file,
+with a backup payment method enabled) and is a standard paid account — it is
+NOT a free-trial or unverified account. Despite that, the Bedrock per-day token
+quota is still `0` and non-adjustable.
 
-1. AWS Console → **Billing and Cost Management** → **Payment preferences /
-   Payment methods** → confirm a **valid, verified payment method** is attached.
-2. Confirm the account has finished activation (no "pending verification"
-   banners anywhere).
-
-Once the account is a fully active paid account, AWS typically removes these
-zeroed daily caps automatically (often within a day).
+That means the usual "add a payment method" step does not apply here. The cap is
+most likely a **new-account Bedrock ramp** (a time-based limit AWS applies to
+recently created accounts, independent of billing). The reliable way to clear it
+is the Account & Billing support case below — **do not wait**, and make sure the
+case states that billing is already verified so support does not deflect to
+"add a payment method."
 
 ## How to open the support case
 
@@ -56,7 +58,11 @@ Bedrock daily token quota is 0 and non-adjustable (us-east-1) - please enable on
 Account ID: 870755687933
 Region: us-east-1
 
-All Amazon Bedrock Converse API calls fail with:
+Account status: This is a standard paid account with a VERIFIED payment method
+(Visa on file, plus a backup payment method enabled). It is NOT a free-trial or
+unverified account, so "add a payment method" does not apply.
+
+Problem: All Amazon Bedrock Converse API calls fail with:
   ThrottlingException: "Too many tokens per day, please wait before trying again."
 
 Evidence from Service Quotas (us-east-1):
@@ -74,9 +80,10 @@ Details:
   request-service-quota-increase.
 
 Request:
-Please remove or raise the account-level Bedrock daily token limit so I can use
-Amazon Bedrock on-demand inference. If this is due to the account's free-tier /
-billing/verification status, please advise exactly what is needed to clear it.
+Billing is already verified, so please remove or raise the account-level Bedrock
+daily token limit (currently 0, non-adjustable) so I can use Amazon Bedrock
+on-demand inference. If this is a new-account ramp, please lift it or tell me
+the exact timeline/condition to clear it.
 
 Use case:
 A personal "CV Enhancer" project that calls Bedrock to analyze and improve a CV
